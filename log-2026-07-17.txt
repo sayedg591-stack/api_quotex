@@ -1,0 +1,3 @@
+2026-07-17 07:30:41.919 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-17 07:30:41.919 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-17 07:30:41.919 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully

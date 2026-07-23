@@ -1,0 +1,23 @@
+modules = ["nodejs-24", "python-base-3.13"]
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["bash", "/home/runner/workspace/start-prod.sh"]
+
+[workflows]
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+packages = ["cacert", "gitFull", "glibcLocales", "libxcrypt", "playwright-driver"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80

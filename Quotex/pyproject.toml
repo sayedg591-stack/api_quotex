@@ -1,0 +1,20 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncio-mqtt>=0.16.2",
+    "beautifulsoup4>=4.15.0",
+    "cloudscraper>=1.2.71",
+    "flask>=3.1.0",
+    "gunicorn>=22.0.0",
+    "loguru>=0.7.3",
+    "numpy>=1.26.0",
+    "pandas>=3.0.3",
+    "playwright>=1.61.0",
+    "pydantic>=2.13.4",
+    "requests>=2.34.2",
+    "rich>=15.0.0",
+    "websockets>=16.0",
+]

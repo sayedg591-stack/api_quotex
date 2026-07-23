@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>SignalPro — OTC Market Signal Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <div class="app-shell">
+
+    <!-- ══════════════════ TOP HEADER ══════════════════ -->
+    <header class="topbar">
+      <button class="icon-btn" id="menu-btn" type="button" aria-label="Open menu">
+        <span class="ico-burger"><span></span><span></span><span></span></span>
+      </button>
+
+      <div class="brand">
+        <span class="brand-logo">◈</span>
+        <span class="brand-name">Signal<span class="brand-accent">Pro</span></span>
+      </div>
+
+      <div class="topbar-right">
+        <span class="live-pill"><span class="live-dot"></span>LIVE</span>
+        <button class="icon-btn" id="notif-btn" type="button" aria-label="Notifications">
+          🔔<span class="notif-dot" id="notif-dot" hidden></span>
+        </button>
+        <span class="conn-indicator" id="conn-indicator" title="Connection status">
+          <span class="conn-dot"></span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Drawer menu -->
+    <div class="drawer-overlay" id="drawer-overlay" hidden></div>
+    <aside class="drawer" id="drawer" hidden aria-hidden="true">
+      <div class="drawer-head">
+        <div class="brand">
+          <span class="brand-logo">◈</span>
+          <span class="brand-name">Signal<span class="brand-accent">Pro</span></span>
+        </div>
+        <button class="icon-btn" id="drawer-close" type="button" aria-label="Close menu">✕</button>
+      </div>
+      <div class="drawer-mode">
+        <span class="badge {{ 'badge-demo' if is_demo else 'badge-live' }}">{{ 'DEMO ACCOUNT' if is_demo else 'LIVE ACCOUNT' }}</span>
+        <span class="badge badge-readonly">READ-ONLY</span>
+      </div>
+      <nav class="drawer-nav">
+        <button class="drawer-link" data-nav="scanner"><span>📡</span>Auto Scanner</button>
+        <button class="drawer-link" data-nav="smart-scanner"><span>📶</span>Smart Scanner</button>
+        <button class="drawer-link" data-nav="analyzer"><span>🎯</span>Manual Analyzer</button>
+        <button class="drawer-link" data-nav="signals"><span>⚡</span>Signals &amp; Markets</button>
+        <button class="drawer-link" data-nav="history"><span>🕐</span>History</button>
+        <button class="drawer-link" data-nav="settings"><span>⚙️</span>Settings</button>
+        <button class="drawer-link" data-nav="backtest"><span>📊</span>Backtest</button>
+        <button class="drawer-link" data-nav="indicators"><span>🧩</span>Indicators</button>
+        <button class="drawer-link" data-nav="session"><span>🔑</span>Quotex Session</button>
+      </nav>
+      <p class="drawer-disclaimer">⚠ Analysis only — no order-execution code path exists anywhere in this project. Nothing here ever places a trade.</p>
+    </aside>
+
+    <!-- Notification dropdown -->
+    <div class="notif-panel" id="notif-panel" hidden>
+      <div class="notif-panel-head">Recent Signals</div>
+      <div class="notif-list" id="notif-list">
+        <div class="tab-empty small">No signals yet — run a scan to populate this feed.</div>
+      </div>
+    </div>
+
+    <main class="app-main">
+
+      <!-- ══════════════════ OVERVIEW STAT CARD ══════════════════ -->
+      <section class="glass-card overview-card">
+        <div class="overview-cell">
+          <span class="overview-label">OTC Assets</span>
+          <span class="overview-value" id="stat-assets">—</span>
+        </div>
+        <div class="overview-cell">
+          <span class="overview-label">Scanning Status</span>
+          <span class="overview-value" id="stat-status"><span class="status-dot idle"></span>Idle</span>
+        </div>
+        <div class="overview-cell">
+          <span class="overview-label">Last Updated</span>
+          <span class="overview-value mono" id="stat-updated">—</span>
+        </div>
+        <div class="overview-cell">
+          <span class="overview-label">Current Payout</span>
+          <span class="overview-value accent" id="stat-payout">—</span>
+        </div>
+      </section>
+
+      <!-- ══════════════════ SEGMENTED TABS ══════════════════ -->
+      <div class="seg-tabs" role="tablist">
+        <button class="seg-tab active" type="button" data-view="scanner" role="tab" aria-selected="true">Auto Scanner</button>
+        <button class="seg-tab" type="button" data-view="analyzer" role="tab" aria-selected="false">Manual Analyzer</button>
+      </div>
+
+      <!-- ══════════════════ AUTO SCANNER VIEW ══════════════════ -->
+      <section class="view" id="view-scanner">
+
+        <!-- Phase 7.4: explicit opt-in control — the scanner NEVER starts on
+             its own (page load, tab navigation, or reload). It only starts
+             when this button is pressed, and it stops if the page/tab is
+             closed. Reopening the site always starts with this OFF. -->
+        <div class="glass-card auto-scan-toggle-card">
+          <div class="auto-scan-toggle-row">
+            <div class="auto-scan-toggle-text">
+              <span class="auto-scan-toggle-title">Auto Scanner</span>
+              <span class="auto-scan-toggle-sub" id="auto-scan-status-sub">Off — press Enable to start scanning</span>
+            </div>
+            <button class="switch" id="auto-scan-toggle-btn" type="button" role="switch" aria-checked="false">
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="mini-stats-row">
+          <div class="mini-stat buy">
+            <span class="mini-stat-label">Top BUY</span>
+            <span class="mini-stat-value" id="mini-top-buy">—</span>
+          </div>
+          <div class="mini-stat sell">
+            <span class="mini-stat-label">Top SELL</span>
+            <span class="mini-stat-value" id="mini-top-sell">—</span>
+          </div>
+          <div class="mini-stat neutral">
+            <span class="mini-stat-label">Signals Today</span>
+            <span class="mini-stat-value" id="mini-signals-today">0</span>
+          </div>
+        </div>
+
+        <!-- Large signal hero card (template — cloned by JS for scanner + analyzer) -->
+        <template id="signal-card-template">
+          <div class="glass-card signal-hero">
+            <div class="hero-top">
+              <div class="hero-asset-wrap">
+                <span class="hero-asset" data-f="asset">—</span>
+                <span class="hero-tf" data-f="tf-badge">—</span>
+              </div>
+              <span class="hero-direction" data-f="direction">WAIT</span>
+            </div>
+            <p class="hero-subtitle" data-f="subtitle">—</p>
+
+            <div class="hero-score-row">
+              <div class="gauge-wrap">
+                <svg viewBox="0 0 120 120" class="gauge-svg">
+                  <circle cx="60" cy="60" r="52" class="gauge-track"></circle>
+                  <circle cx="60" cy="60" r="52" class="gauge-fill" data-f="gauge-circle"
+                          stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
+                </svg>
+                <div class="gauge-center">
+                  <span class="gauge-value" data-f="gauge-value">0</span>
+                  <span class="gauge-suffix">%</span>
+                  <span class="gauge-caption">STRENGTH</span>
+                </div>
+              </div>
+
+              <div class="hero-facts">
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Filter Score</span>
+                  <span class="hero-fact-v"><span data-f="score">0</span>/100</span>
+                </div>
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Trend</span>
+                  <span class="hero-fact-v" data-f="trend">—</span>
+                </div>
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Timeframe</span>
+                  <span class="hero-fact-v" data-f="timeframes">—</span>
+                </div>
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Expiry</span>
+                  <span class="hero-fact-v" data-f="expiry">—</span>
+                </div>
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Updated</span>
+                  <span class="hero-fact-v" data-f="updated">—</span>
+                </div>
+                <div class="hero-fact">
+                  <span class="hero-fact-k">Payout</span>
+                  <span class="hero-fact-v" data-f="payout">—</span>
+                </div>
+              </div>
+            </div>
+
+            <h4 class="hero-section-title">Passed Filters</h4>
+            <div class="filters-grid" data-f="filters"></div>
+
+            <div class="small-metrics-grid" data-f="metrics"></div>
+
+            <div class="hero-chart-wrap" data-f="chart-wrap">
+              <canvas class="hero-chart"></canvas>
+            </div>
+          </div>
+        </template>
+
+        <div id="hero-slot">
+          <div class="glass-card signal-hero placeholder" id="hero-placeholder">
+            <span class="placeholder-icon">📡</span>
+            <p>Scanning OTC markets…</p>
+            <p class="placeholder-sub" id="scan-progress-text">Preparing scan cycle</p>
+          </div>
+        </div>
+
+        <div class="section-head">
+          <h3 class="section-title">Top Signals</h3>
+          <button class="tab-refresh-btn" id="rescan-btn" type="button">↻ Rescan</button>
+        </div>
+        <div class="signals-list" id="signals-list">
+          <div class="tab-loading">Waiting for first scan…</div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ MANUAL ANALYZER VIEW ══════════════════ -->
+      <section class="view" id="view-analyzer" hidden>
+
+        <!-- ── Loading skeleton (shown immediately on Analyze click) ── -->
+        <div id="man-loading-slot" class="glass-card man-loading-card" hidden>
+          <div class="man-load-wrap">
+            <div class="man-load-spinner"></div>
+            <p class="man-load-label">Analyzing <strong id="man-load-asset">—</strong></p>
+            <p class="man-load-sub">Running full live pipeline…</p>
+          </div>
+        </div>
+
+        <!-- ── Result card (above the form on mobile) ── -->
+        <div id="man-result-slot"></div>
+
+        <!-- ── Placeholder (shown until first Analyze) ── -->
+        <section class="glass-card result placeholder" id="man-placeholder">
+          <span class="placeholder-icon">🎯</span>
+          <p>Select a pair, timeframe and expiry, then press Analyze.</p>
+          <p class="placeholder-sub">Every analysis re-runs the full live pipeline: candle fetch → indicators → backtest → weighted confluence vote.</p>
+        </section>
+
+        <!-- ── Configuration form (below result on mobile) ── -->
+        <section class="glass-card controls">
+          <h2 class="panel-title">Configure Analysis</h2>
+
+          <!-- Selected-asset badge — always shows which pair is queued -->
+          <div class="man-selected-info" id="man-selected-info">
+            <span class="man-sel-label">Selected:</span>
+            <span class="man-sel-asset" id="man-selected-display">—</span>
+          </div>
+
+          <label class="field-label">Pair</label>
+          <input type="hidden" id="man-asset" value="{{ default_asset }}">
+          <input type="text" id="man-asset-search" class="field-input"
+                 placeholder="Search pairs…" autocomplete="off" spellcheck="false">
+          <div id="man-asset-grid" class="asset-grid" role="listbox" aria-label="Asset selector"></div>
+
+          <label class="field-label" for="man-timeframe">Timeframe</label>
+          <select id="man-timeframe" class="field-select">
+            {% for tf in timeframes %}
+            <option value="{{ tf }}" {{ 'selected' if tf == default_timeframe else '' }}>{{ tf }}</option>
+            {% endfor %}
+          </select>
+
+          <label class="field-label" for="man-expiry">Expiry</label>
+          <select id="man-expiry" class="field-select">
+            <option value="30 Seconds">30 Seconds</option>
+            <option value="1 Minute" selected>1 Minute</option>
+            <option value="2 Minutes">2 Minutes</option>
+            <option value="3 Minutes">3 Minutes</option>
+            <option value="5 Minutes">5 Minutes</option>
+            <option value="15 Minutes">15 Minutes</option>
+          </select>
+
+          <button id="man-analyze-btn" class="generate-btn">
+            <span class="btn-label">Analyze</span>
+            <span class="btn-spinner" hidden></span>
+          </button>
+
+          <p id="man-error-box" class="error-box" hidden></p>
+
+          <div class="disclaimer">
+            <p>⚠ This dashboard only displays a computed signal. It never places
+            trades — there is no order-execution code path anywhere in this project.</p>
+          </div>
+        </section>
+
+      </section>
+
+      <!-- ══════════════════ SIGNALS & MARKETS PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-signals" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Live Markets</h3>
+          <button class="tab-refresh-btn" id="refresh-markets-btn" type="button">↻ Refresh</button>
+        </div>
+        <div id="markets-list" class="markets-list">
+          <div class="tab-loading">Fetching prices…</div>
+        </div>
+        <p class="markets-note">Prices refresh every 15s · Tap a row to analyze that pair</p>
+
+        <div class="section-head" style="margin-top:22px;">
+          <h3 class="section-title">All Scanned Signals</h3>
+        </div>
+        <div class="signals-list" id="signals-list-full">
+          <div class="tab-empty">Run the Auto Scanner to populate this list.</div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ HISTORY PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-history" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Signal History</h3>
+          <button class="tab-refresh-btn" id="clear-history-btn" type="button">🗑 Clear</button>
+        </div>
+        <div id="history-list" class="history-list">
+          <div class="tab-empty">No signals generated yet this session.</div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ SETTINGS PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-settings" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Settings</h3>
+        </div>
+
+        <!-- Quick links — Settings, Backtest, Indicators and Quotex Session
+             are separate pages (also reachable from the drawer menu); these
+             give one-tap access from the bottom nav's Settings tab too. -->
+        <div class="quick-links-row">
+          <button class="quick-link-btn" type="button" data-nav="backtest">📊<span>Backtest</span></button>
+          <button class="quick-link-btn" type="button" data-nav="indicators">🧩<span>Indicators</span></button>
+          <button class="quick-link-btn" type="button" data-nav="session">🔑<span>Quotex Session</span></button>
+          <button class="quick-link-btn" type="button" data-nav="smart-scanner">📶<span>Smart Scanner</span></button>
+        </div>
+
+        <div class="settings-cards">
+          <div class="settings-card">
+            <div class="settings-card-label">Account Mode</div>
+            <div class="settings-card-value">{{ 'Demo Account' if is_demo else 'Live Account' }}</div>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-label">Analysis Mode</div>
+            <div class="settings-card-value">Read-only · No trades are placed</div>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-label">Available Timeframes</div>
+            <div class="settings-card-value">{{ timeframes | join(' · ') }}</div>
+          </div>
+          <div class="settings-card warning">
+            <div class="settings-card-label">⚠ Disclaimer</div>
+            <div class="settings-card-value">
+              This dashboard displays computed analysis signals only.
+              No order-execution code exists anywhere in this project.
+            </div>
+          </div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Editable Settings</h3>
+          <span class="settings-save-state" id="settings-save-state"></span>
+        </div>
+        <div id="settings-form-slot" class="glass-card settings-form-card">
+          <div class="tab-loading">Loading settings…</div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Backups</h3>
+          <button class="tab-refresh-btn" id="settings-backup-now-btn" type="button">＋ Backup Now</button>
+        </div>
+        <div id="settings-backups-list" class="settings-backups-list">
+          <div class="tab-empty small">No backups yet.</div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Advanced</h3>
+        </div>
+        <div class="glass-card advanced-actions-card">
+          <button class="secondary-btn" id="settings-export-btn" type="button">⬇ Export Settings</button>
+          <label class="secondary-btn" for="settings-import-file">⬆ Import Settings
+            <input type="file" id="settings-import-file" accept="application/json" hidden>
+          </label>
+          <button class="secondary-btn danger" id="settings-reset-btn" type="button">↺ Reset to Defaults</button>
+        </div>
+        <p id="settings-error-box" class="error-box" hidden></p>
+      </section>
+
+      <!-- ══════════════════ BACKTEST PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-backtest" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Backtest</h3>
+        </div>
+        <p class="page-intro">
+          Runs <code>backtest_factor_accuracy()</code> / <code>compute_dynamic_weights()</code>
+          against real historical candles for each selected asset — analysis
+          only, no trades. Multi-timeframe confirmation and Payout can never
+          be backtested (Quotex has no historical payout API); see the
+          results panel for what's included.
+        </p>
+
+        <div class="glass-card backtest-config-card">
+          <label class="field-label" for="bt-timeframe">Timeframe</label>
+          <select id="bt-timeframe" class="field-select">
+            {% for tf in timeframes %}
+            <option value="{{ tf }}" {{ 'selected' if tf == default_timeframe else '' }}>{{ tf }}</option>
+            {% endfor %}
+          </select>
+
+          <label class="field-label" for="bt-candles">Candle Count</label>
+          <select id="bt-candles" class="field-select">
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+            <option value="1500">1500</option>
+            <option value="2000" selected>2000 (default)</option>
+            <option value="3000">3000</option>
+            <option value="5000">5000</option>
+          </select>
+
+          <label class="field-label">Assets</label>
+          <div class="bt-asset-mode-row">
+            <button class="chip-toggle active" id="bt-mode-all" type="button">All OTC</button>
+            <button class="chip-toggle" id="bt-mode-custom" type="button">Choose…</button>
+          </div>
+          <div id="bt-asset-grid" class="asset-grid" hidden></div>
+
+          <div class="bt-controls-row">
+            <button class="generate-btn" id="bt-run-btn" type="button"><span class="btn-label">▶ Run Backtest</span></button>
+            <button class="secondary-btn" id="bt-pause-btn" type="button" hidden>⏸ Pause</button>
+            <button class="secondary-btn" id="bt-resume-btn" type="button" hidden>▶ Resume</button>
+            <button class="secondary-btn danger" id="bt-stop-btn" type="button" hidden>⏹ Stop</button>
+          </div>
+          <p id="bt-error-box" class="error-box" hidden></p>
+        </div>
+
+        <div class="glass-card backtest-progress-card" id="bt-progress-card" hidden>
+          <div class="bt-progress-head">
+            <span id="bt-progress-state">STOPPED</span>
+            <span id="bt-progress-pct">0%</span>
+          </div>
+          <div class="bt-progress-bar-track"><div class="bt-progress-bar-fill" id="bt-progress-bar-fill"></div></div>
+          <div class="small-metrics-grid">
+            <div class="metric-card"><span class="k">Current Asset</span><span class="v" id="bt-current-asset">—</span></div>
+            <div class="metric-card"><span class="k">Current Indicator</span><span class="v" id="bt-current-indicator">—</span></div>
+            <div class="metric-card"><span class="k">Elapsed</span><span class="v" id="bt-elapsed">—</span></div>
+            <div class="metric-card"><span class="k">ETA</span><span class="v" id="bt-eta">—</span></div>
+          </div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Results</h3>
+        </div>
+        <div id="bt-results-slot" class="glass-card backtest-results-card">
+          <div class="tab-empty">Run a backtest to see suggested weights and per-asset accuracy.</div>
+        </div>
+        <p class="page-intro small">
+          ⚠ This project's development sandbox has no network access — the
+          Backtest engine has never been exercised against live Quotex data
+          here. Timing/results above are only as good as your live environment.
+        </p>
+      </section>
+
+      <!-- ══════════════════ INDICATORS PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-indicators" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Indicators</h3>
+          <button class="tab-refresh-btn" id="indicators-refresh-btn" type="button">↻ Refresh</button>
+        </div>
+        <p class="page-intro">
+          Core indicators can independently produce a BUY/SELL vote; Helper
+          indicators only adjust confidence and can never generate a signal
+          alone (the confluence engine already requires ≥3 agreeing factors).
+        </p>
+        <div id="indicators-list-slot" class="indicators-list">
+          <div class="tab-loading">Loading indicator registry…</div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ QUOTEX SESSION PAGE ══════════════════ -->
+      <section class="view tab-page" id="page-session" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Quotex Session</h3>
+        </div>
+        <div class="glass-card session-status-card" id="session-status-card">
+          <div class="tab-loading">Loading session status…</div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Update SSID</h3>
+        </div>
+        <div class="glass-card session-update-card">
+          <label class="field-label" for="session-ssid-input">Paste SSID</label>
+          <input type="text" id="session-ssid-input" class="field-input" autocomplete="off" spellcheck="false"
+                 placeholder="Paste the ssid value from Quotex DevTools…">
+          <p class="page-intro small">
+            Open quotex.io → DevTools (F12) → Network tab → WS filter →
+            find the WebSocket connection → copy the <code>ssid</code> value from
+            the URL or payload. This is saved to <code>quotex/session.json</code> only
+            — never to an environment variable.
+          </p>
+          <button class="generate-btn" id="session-save-btn" type="button"><span class="btn-label">Save SSID</span></button>
+          <button class="secondary-btn" id="session-validate-btn" type="button">✓ Validate Session</button>
+          <p id="session-error-box" class="error-box" hidden></p>
+        </div>
+
+        <div class="glass-card session-validate-result" id="session-validate-result" hidden></div>
+      </section>
+
+      <!-- ══════════════════ PHASE 8.2/8.3 — SMART SCANNER (BACKEND ENGINE) PAGE ══════════════════ -->
+      <!-- Talks ONLY to the existing /api/scanner/* and /api/settings*
+           routes (ScannerEngine + SettingsStore, Phase 7/8.1/8.2/8.3).
+           This is a SEPARATE page from the "Auto Scanner" tab above —
+           that tab is an older, simpler client-side polling loop that
+           calls /api/signal directly per asset and has never talked to
+           ScannerEngine at all (see HANDOFF.md's "single most important
+           gotcha"). No new scanner engine or route was created for this
+           page at any point. -->
+      <section class="view tab-page" id="page-smart-scanner" hidden>
+        <div class="section-head">
+          <h3 class="section-title">Smart Scanner</h3>
+        </div>
+        <p class="page-intro">
+          Drives the backend <code>ScannerEngine</code> directly via
+          <code>/api/scanner/*</code> — the same continuously-ranking
+          engine Phase 7/7.1/8.1 built and tested. It uses the shared
+          Quotex connection and the shared background loop; there is only
+          ever one scanner instance. It <b>never starts on its own</b> —
+          not on page load, not on tab navigation — only the Start button
+          below starts it, and it keeps running server-side even if you
+          navigate away, until you (or another tab) press Stop.
+        </p>
+
+        <!-- ══ Phase 8.3 — Scanner Settings (backed by SettingsStore's
+             existing "scanner" section; same fields Phase 8.1 taught
+             ScannerEngine to read at start() time) ══ -->
+        <div class="section-head" style="margin-top:4px;">
+          <h3 class="section-title">Scanner Settings</h3>
+        </div>
+        <div class="glass-card smart-scanner-settings-card">
+          <p class="page-intro small" style="margin-top:0;">
+            Loaded automatically from Settings. Changing these does
+            <b>not</b> restart a running scanner — they apply the next
+            time you press Start.
+          </p>
+
+          <label class="field-label">Enabled Assets</label>
+          <div class="bt-asset-mode-row">
+            <button class="chip-toggle active" id="ss-set-asset-mode-all" type="button">All OTC</button>
+            <button class="chip-toggle" id="ss-set-asset-mode-custom" type="button">Choose…</button>
+          </div>
+          <div id="ss-set-asset-grid" class="asset-grid" hidden></div>
+
+          <label class="field-label" style="margin-top:14px;">Enabled Timeframes</label>
+          <div class="bt-asset-mode-row">
+            <button class="chip-toggle active" id="ss-set-tf-mode-default" type="button">Default</button>
+            <button class="chip-toggle" id="ss-set-tf-mode-custom" type="button">Choose…</button>
+          </div>
+          <div id="ss-set-tf-grid" class="bt-asset-mode-row" hidden>
+            {% for tf in timeframes %}
+            <button class="chip-toggle" type="button" data-tf="{{ tf }}">{{ tf }}</button>
+            {% endfor %}
+          </div>
+
+          <label class="field-label" for="ss-set-min-filter-score" style="margin-top:14px;">
+            Minimum Filter Score — <span id="ss-set-min-filter-score-val">0</span>
+          </label>
+          <input type="range" id="ss-set-min-filter-score" min="0" max="100" step="1" value="0">
+
+          <div class="ss-set-fields-row">
+            <div>
+              <label class="field-label" for="ss-set-top-signals">Top Signals</label>
+              <select id="ss-set-top-signals" class="field-select">
+                <option value="">Default</option>
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="15">15</option>
+                <option value="20">20</option>
+                <option value="25">25</option>
+                <option value="30">30</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="ss-set-scan-interval">Scan Interval</label>
+              <select id="ss-set-scan-interval" class="field-select">
+                <option value="">Default</option>
+                <option value="30">30s</option>
+                <option value="60">60s</option>
+                <option value="120">120s</option>
+                <option value="180">180s</option>
+                <option value="300">300s</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="auto-scan-toggle-row" style="margin-top:14px;">
+            <div class="auto-scan-toggle-text">
+              <span class="auto-scan-toggle-title">Scanner Enabled</span>
+              <span class="auto-scan-toggle-sub">Off = blocks the next Start (does not stop an active run)</span>
+            </div>
+            <button class="switch" id="ss-set-enabled-toggle" type="button" role="switch" aria-checked="true">
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+
+          <div class="ss-controls-row" style="margin-top:16px;">
+            <button class="generate-btn" id="ss-set-save-btn" type="button"><span class="btn-label">Save Settings</span></button>
+            <button class="secondary-btn" id="ss-set-reload-btn" type="button">↻ Reload</button>
+            <button class="secondary-btn danger" id="ss-set-reset-btn" type="button">Reset to Defaults</button>
+          </div>
+          <p id="ss-set-msg" class="page-intro small" style="margin-top:8px;"></p>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Scanner Controls</h3>
+        </div>
+        <div class="glass-card smart-scanner-controls-card">
+          <div class="ss-controls-row">
+            <button class="generate-btn" id="ss-start-btn" type="button"><span class="btn-label">▶ Start Scanner</span></button>
+            <button class="secondary-btn" id="ss-pause-btn" type="button" hidden>⏸ Pause</button>
+            <button class="secondary-btn" id="ss-resume-btn" type="button" hidden>▶ Resume</button>
+            <button class="secondary-btn danger" id="ss-stop-btn" type="button" hidden>⏹ Stop</button>
+          </div>
+          <p id="ss-error-box" class="error-box" hidden></p>
+        </div>
+
+        <div class="glass-card smart-scanner-progress-card" id="ss-progress-card">
+          <div class="bt-progress-head">
+            <span id="ss-state">STOPPED</span>
+            <span id="ss-progress-pct">0%</span>
+          </div>
+          <div class="bt-progress-bar-track"><div class="bt-progress-bar-fill" id="ss-progress-bar-fill"></div></div>
+          <div class="small-metrics-grid">
+            <div class="metric-card"><span class="k">Current Asset</span><span class="v" id="ss-current-asset">—</span></div>
+            <div class="metric-card"><span class="k">Current Timeframe</span><span class="v" id="ss-current-tf">—</span></div>
+            <div class="metric-card"><span class="k">Assets Completed</span><span class="v" id="ss-assets-completed">— / —</span></div>
+            <div class="metric-card"><span class="k">Current Cycle</span><span class="v" id="ss-current-cycle">—</span></div>
+            <div class="metric-card"><span class="k">Elapsed</span><span class="v" id="ss-elapsed">—</span></div>
+            <div class="metric-card"><span class="k">ETA</span><span class="v" id="ss-eta">—</span></div>
+            <div class="metric-card"><span class="k">Last Scan</span><span class="v" id="ss-last-scan">—</span></div>
+          </div>
+        </div>
+
+        <div class="section-head" style="margin-top:20px;">
+          <h3 class="section-title">Ranked Signals</h3>
+        </div>
+        <div id="ss-results-slot" class="glass-card ss-results-card">
+          <div class="tab-empty">Press Start Scanner to begin ranking OTC assets.</div>
+        </div>
+        <p class="page-intro small">
+          Only assets that pass every mandatory gate (<code>mandatory_pass</code>)
+          and have a non-WAIT signal are shown here — same visibility rule
+          the backend has always used. Ranked by Filter Score, then
+          Confidence, then Payout, then freshness (all descending).
+          Analysis only; nothing here places a trade.
+        </p>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      SignalPro · OTC Market Analyzer — for market analysis only, no trades are ever placed.
+    </footer>
+
+    <!-- ══════════════════ BOTTOM NAVIGATION ══════════════════ -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" type="button" data-nav="scanner">
+        <span class="nav-icon">📡</span><span class="nav-label">Scanner</span>
+      </button>
+      <button class="nav-item" type="button" data-nav="analyzer">
+        <span class="nav-icon">🎯</span><span class="nav-label">Analyze</span>
+      </button>
+      <button class="nav-item" type="button" data-nav="signals">
+        <span class="nav-icon">⚡</span><span class="nav-label">Signals</span>
+      </button>
+      <button class="nav-item" type="button" data-nav="history">
+        <span class="nav-icon">🕐</span><span class="nav-label">History</span>
+      </button>
+      <button class="nav-item" type="button" data-nav="settings">
+        <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
+      </button>
+    </nav>
+  </div>
+
+  <script>
+    window._OTC_ASSETS      = {{ otc_assets  | tojson }};
+    window._LIVE_ASSETS     = {{ live_assets | tojson }};
+    window._IS_DEMO         = {{ is_demo     | tojson }};
+    window._DEFAULT_ASSET   = {{ default_asset | tojson }};
+    window._DEFAULT_TF      = {{ default_timeframe | tojson }};
+    window._TIMEFRAMES      = {{ timeframes | tojson }};
+  </script>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

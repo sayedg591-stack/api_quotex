@@ -1,0 +1,24 @@
+kind = "api"
+previewPath = "/"
+title = "Quotex Signal Dashboard"
+version = "1.0.0"
+id = "3B4_FFSkEVBkAeYMFRJ2e"
+
+[[services]]
+localPort = 5000
+name = "API Server"
+paths = ["/"]
+
+[services.development]
+run = "bash /home/runner/workspace/start-prod.sh"
+
+[services.production]
+
+[services.production.run]
+args = ["bash", "/home/runner/workspace/start-prod.sh"]
+
+[services.production.run.env]
+PORT = "5000"
+
+[services.production.health.startup]
+path = "/healthz"

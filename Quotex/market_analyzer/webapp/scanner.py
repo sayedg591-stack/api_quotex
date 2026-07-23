@@ -1,0 +1,590 @@
+"""
+Phase 7 — Smart Scanner Engine
+================================
+Pure orchestration layer around the existing analysis pipeline. This module
+NEVER computes an indicator, NEVER runs confluence logic, and NEVER talks to
+Quotex directly — it only calls the `run_pipeline(asset, timeframe)` async
+callable supplied by app.py (i.e. the existing `_run_pipeline`, unchanged),
+and reads fields that pipeline already produces.
+
+Analysis only. No order is placed by this module or anything it calls.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+
+try:
+    from analyzer import calculate_filter_score
+except ImportError:
+    from market_analyzer.analyzer import calculate_filter_score
+
+SCANNER_SCHEMA_VERSION = "1.0"
+SCANNER_ENGINE_VERSION = "phase8.1"  # Phase 8.1: SettingsStore integration + progress tracking + status()/results() aliases (additive only — see CHANGELOG.md)
+
+# ── States ──────────────────────────────────────────────────────────────────
+STOPPED = "STOPPED"
+RUNNING = "RUNNING"
+PAUSED = "PAUSED"
+YIELDING = "YIELDING"      # momentarily deferring to an in-flight manual request
+DEGRADED = "DEGRADED"      # too many consecutive failures — cooling down
+RECOVERING = "RECOVERING"  # cooldown elapsed, probing with one asset before resuming
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+@dataclass
+class ScannerConfig:
+    timeframes: List[str] = field(default_factory=lambda: ["5m"])
+    asset_gap_seconds: float = 0.7          # pacing delay between assets
+    cycle_interval_seconds: float = 120.0   # target time between cycle starts
+    asset_timeout_seconds: float = 20.0     # per-asset _run_pipeline timeout
+    min_payout: float = 80.0
+    top_n: int = 10
+    min_confidence: float = 70.0
+    cache_ttl_seconds: float = 300.0        # entries older than this are purged
+    degrade_after_consecutive_failures: int = 5
+    degrade_cooldown_seconds: float = 30.0
+    manual_priority_max_wait_seconds: float = 5.0
+
+
+class ScannerEngine:
+    """
+    Sequential, single-flight scanner. Designed to run as ONE coroutine on
+    the app's existing shared background event loop (_BG_LOOP) so it never
+    introduces concurrent Quotex fetches — the same serialization guarantee
+    /api/signal already relies on.
+    """
+
+    def __init__(
+        self,
+        run_pipeline: Callable[[str, str], Awaitable[Dict[str, Any]]],
+        assets: List[str],
+        invalidate_fetcher: Callable[[], None],
+        adx_trending: float,
+        config: Optional[ScannerConfig] = None,
+        settings_store: Optional[Any] = None,
+    ) -> None:
+        self._run_pipeline = run_pipeline
+        self._assets = list(assets)
+        self._invalidate_fetcher = invalidate_fetcher
+        self._adx_trending = adx_trending
+        self.cfg = config or ScannerConfig()
+
+        # Phase 8.1 — SettingsStore integration (fully optional/additive).
+        # `settings_store` is duck-typed (anything with a .get() -> dict
+        # method, matching webapp/settings_store.py's SettingsStore) rather
+        # than imported by class, to avoid any import coupling between
+        # scanner.py and settings_store.py. If None (or if reading it ever
+        # fails for any reason), the scanner behaves EXACTLY as it did
+        # before Phase 8.1 — every settings read below is wrapped so a
+        # missing/broken settings_store can never break the scan loop.
+        self._settings_store = settings_store
+        # Effective per-run asset list — defaults to the full asset list
+        # passed in, exactly like Phase 7 behavior. Only narrowed if
+        # settings.scanner.enabled_assets is a non-empty list at start()
+        # time.
+        self._effective_assets: List[str] = list(assets)
+        # Effective per-run minimum filter score gate for get_results()/
+        # results() — 0.0 means "no additional gate", i.e. byte-identical
+        # to pre-Phase-8.1 behavior (only the existing mandatory_pass gate
+        # applies).
+        self._minimum_filter_score: float = 0.0
+        # Last settings snapshot actually applied at start() — exposed via
+        # get_status() purely for operator visibility/debugging; not used
+        # for any control-flow decision itself.
+        self._settings_applied: Optional[Dict[str, Any]] = None
+
+        self.state = STOPPED
+        self._loop_task: Optional[asyncio.Task] = None
+        self._stop_requested = False
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()  # not paused by default
+
+        # Phase 8.1 — progress tracking (reset every cycle in _scan_loop).
+        self._assets_completed: int = 0
+
+        # Manual-request priority (§8/§9 of the approved architecture)
+        self.manual_requests_in_flight = 0
+
+        # Cache: (asset, timeframe) -> result dict (already JSON-safe)
+        self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+        # Metrics
+        self._asset_durations: deque = deque(maxlen=200)  # rolling window, seconds
+        self._success_count = 0
+        self._failure_count = 0
+        self.last_error: Optional[str] = None
+
+        # History: last 10 completed cycles
+        self.history: deque = deque(maxlen=10)
+
+        # Event log: last 100 events
+        self.events: deque = deque(maxlen=100)
+
+        self.current_cycle = 0
+        self.current_asset: Optional[str] = None
+        # Phase 8.3 — additional status-panel fields, additive only.
+        self.current_timeframe: Optional[str] = None
+        self._last_scan_time: Optional[float] = None  # epoch of the most recent per-asset scan attempt (success or failure)
+        self._cycle_started_at: Optional[float] = None
+        self._consecutive_failures = 0
+        self._last_full_cycle_duration: Optional[float] = None
+
+    # ── Event log helper ─────────────────────────────────────────────────────
+    def _log_event(self, kind: str, detail: str = "") -> None:
+        self.events.append({"ts": _iso(_now()), "event": kind, "detail": detail})
+
+    def _set_state(self, new_state: str, detail: str = "") -> None:
+        if new_state != self.state:
+            self._log_event("state_change", f"{self.state} -> {new_state}" + (f" ({detail})" if detail else ""))
+        self.state = new_state
+
+    # ── Phase 8.1: SettingsStore integration (additive, best-effort) ────────
+    def _read_scanner_settings(self) -> Optional[Dict[str, Any]]:
+        """
+        Best-effort read of the `scanner` section of settings_store.get().
+        Returns None if no settings_store was supplied, or if reading it
+        fails for ANY reason (malformed file, missing key, wrong type,
+        etc.) — a broken/absent settings_store must never be able to break
+        scanner startup or the scan loop, so every caller of this method
+        already treats None as "fall back to prior, pre-Phase-8.1 behavior".
+        """
+        if self._settings_store is None:
+            return None
+        try:
+            data = self._settings_store.get()
+            scanner_settings = data.get("scanner", {}) if isinstance(data, dict) else {}
+            return scanner_settings if isinstance(scanner_settings, dict) else {}
+        except Exception as exc:  # noqa: BLE001 — never let a settings read crash the scanner
+            self._log_event("settings_read_failed", str(exc))
+            return None
+
+    # ── Lifecycle control (called from Flask routes, NOT from the loop itself) ─
+    def start(self, loop: asyncio.AbstractEventLoop, timeframes: Optional[List[str]] = None,
+              top_n: Optional[int] = None, min_confidence: Optional[float] = None,
+              refresh_seconds: Optional[float] = None) -> Dict[str, Any]:
+        if self.state != STOPPED:
+            return {"ok": False, "message": f"Scanner already {self.state}"}
+
+        # Phase 8.1 — SettingsStore integration. `settings` is None whenever
+        # no settings_store was supplied (or a read failed), in which case
+        # every line below is a no-op and start() behaves exactly as it did
+        # before Phase 8.1 (explicit args only, same defaults as ScannerConfig).
+        settings = self._read_scanner_settings()
+
+        if settings is not None and settings.get("scanner_enabled", True) is False:
+            self._log_event("scanner_start_blocked", "settings.scanner.scanner_enabled=false")
+            return {"ok": False, "message": "Scanner is disabled in Settings (scanner.scanner_enabled=false)"}
+
+        settings = settings or {}
+        # Explicit start()-call args always win over settings (matches the
+        # existing Settings-vs-request-override precedence already used
+        # elsewhere in this project, e.g. app.py's filter-score overrides).
+        # An empty/falsy settings value (missing key, empty list, 0, None)
+        # is treated as "not set" so pre-Phase-8.1 defaults are preserved.
+        effective_timeframes = timeframes or settings.get("enabled_timeframes") or None
+        effective_top_n = top_n or settings.get("top_signals") or None
+        effective_refresh = refresh_seconds or settings.get("scan_interval") or None
+        settings_assets = settings.get("enabled_assets") or None
+        settings_min_filter_score = settings.get("minimum_filter_score")
+
+        if effective_timeframes:
+            self.cfg.timeframes = effective_timeframes
+        if effective_top_n:
+            self.cfg.top_n = effective_top_n
+        if min_confidence is not None:
+            self.cfg.min_confidence = min_confidence
+        if effective_refresh:
+            self.cfg.cycle_interval_seconds = effective_refresh
+
+        # Narrow the per-run asset list only if settings name a non-empty
+        # subset that actually intersects the known asset list; otherwise
+        # fall back to the full list exactly as before Phase 8.1.
+        if settings_assets:
+            narrowed = [a for a in settings_assets if a in self._assets]
+            self._effective_assets = narrowed or list(self._assets)
+        else:
+            self._effective_assets = list(self._assets)
+
+        try:
+            self._minimum_filter_score = float(settings_min_filter_score) if settings_min_filter_score else 0.0
+        except (TypeError, ValueError):
+            self._minimum_filter_score = 0.0
+
+        self._settings_applied = dict(settings) if settings else None
+
+        self._stop_requested = False
+        self._pause_event.set()
+        self._assets_completed = 0
+        self._set_state(RUNNING, "start requested")
+        self._log_event(
+            "scanner_start",
+            f"timeframes={self.cfg.timeframes} top_n={self.cfg.top_n} "
+            f"assets={len(self._effective_assets)} min_filter_score={self._minimum_filter_score}",
+        )
+        self._loop_task = asyncio.run_coroutine_threadsafe(self._scan_loop(), loop)
+        return {"ok": True, "message": "Scanner started"}
+
+    def stop(self) -> Dict[str, Any]:
+        if self.state == STOPPED:
+            return {"ok": False, "message": "Scanner already stopped"}
+        self._stop_requested = True
+        self._pause_event.set()  # wake it if paused, so it can see the stop flag
+        self._log_event("scanner_stop", "stop requested")
+        return {"ok": True, "message": "Stop requested — scanner will halt at the next asset boundary"}
+
+    def pause(self) -> Dict[str, Any]:
+        if self.state == STOPPED:
+            return {"ok": False, "message": "Scanner is not running"}
+        self._pause_event.clear()
+        self._set_state(PAUSED, "pause requested")
+        self._log_event("scanner_pause", "")
+        return {"ok": True, "message": "Scanner paused"}
+
+    def resume(self) -> Dict[str, Any]:
+        if self.state != PAUSED:
+            return {"ok": False, "message": f"Scanner is not paused (state={self.state})"}
+        self._pause_event.set()
+        self._set_state(RUNNING, "resume requested")
+        self._log_event("scanner_resume", "")
+        return {"ok": True, "message": "Scanner resumed"}
+
+    # ── Manual-request priority (§8/§9) ─────────────────────────────────────
+    def manual_request_started(self) -> None:
+        self.manual_requests_in_flight += 1
+
+    def manual_request_finished(self) -> None:
+        self.manual_requests_in_flight = max(0, self.manual_requests_in_flight - 1)
+
+    async def _yield_to_manual_requests(self) -> None:
+        if self.manual_requests_in_flight <= 0:
+            return
+        prev_state = self.state
+        self._set_state(YIELDING, f"{self.manual_requests_in_flight} manual request(s) in flight")
+        waited = 0.0
+        step = 0.1
+        while self.manual_requests_in_flight > 0 and waited < self.cfg.manual_priority_max_wait_seconds:
+            await asyncio.sleep(step)
+            waited += step
+        self._set_state(prev_state if prev_state != YIELDING else RUNNING)
+
+    # ── Cache ────────────────────────────────────────────────────────────────
+    def _store_result(self, asset: str, timeframe: str, result: Dict[str, Any],
+                       duration_seconds: float) -> None:
+        """
+        result already contains filter_score/passed_filters/failed_filters/
+        filter_breakdown — computed ONCE by _run_pipeline() via
+        analyzer.calculate_filter_score(). Phase 7 STEP 1: scanner.py no
+        longer computes its own gates; this is purely a passthrough + cache
+        bookkeeping step.
+        """
+        entry = dict(result)  # shallow copy — result is already the JSON-safe dict _run_pipeline returns
+        entry["schema_version"] = SCANNER_SCHEMA_VERSION
+        entry["engine_version"] = SCANNER_ENGINE_VERSION
+        entry["last_update"] = _iso(_now())
+        entry["scan_duration_ms"] = round(duration_seconds * 1000, 1)
+        entry["scanner_cycle"] = self.current_cycle
+        self._cache[(asset, timeframe)] = entry
+
+    @staticmethod
+    def _parse_iso_epoch(ts: str) -> float:
+        """
+        Best-effort ISO-8601 (`%Y-%m-%dT%H:%M:%SZ`, as produced by `_iso()`)
+        -> epoch seconds, for numeric freshness comparisons. Returns 0.0 (the
+        oldest possible value) on any parse failure so a malformed/missing
+        timestamp sorts last, never crashes ranking. Phase 8.3 — extracted
+        so both `_cleanup_stale_cache()` and `get_results()`'s ranking can
+        share one implementation instead of duplicating the parse.
+        """
+        try:
+            return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+        except Exception:
+            return 0.0
+
+    def _cleanup_stale_cache(self) -> int:
+        """TTL-based automatic cleanup. Returns number of entries purged."""
+        cutoff = _now() - self.cfg.cache_ttl_seconds
+        stale_keys = []
+        for key, entry in self._cache.items():
+            entry_ts = self._parse_iso_epoch(entry.get("last_update", ""))
+            if entry_ts == 0.0:
+                continue  # unparseable — leave it, matches prior behavior of skipping on parse failure
+            if entry_ts < cutoff:
+                stale_keys.append(key)
+        for key in stale_keys:
+            del self._cache[key]
+        if stale_keys:
+            self._log_event("cache_cleanup", f"purged {len(stale_keys)} stale entries")
+        return len(stale_keys)
+
+    # ── The scan loop itself ────────────────────────────────────────────────
+    async def _scan_loop(self) -> None:
+        try:
+            while not self._stop_requested:
+                await self._pause_event.wait()
+                if self._stop_requested:
+                    break
+
+                self.current_cycle += 1
+                self._cycle_started_at = _now()
+                self._assets_completed = 0  # Phase 8.1 — reset progress counter each cycle
+                self._log_event("cycle_start", f"cycle={self.current_cycle}")
+                cycle_success = 0
+                cycle_failure = 0
+
+                for asset in self._effective_assets:
+                    if self._stop_requested:
+                        break
+                    await self._pause_event.wait()
+                    if self._stop_requested:
+                        break
+
+                    await self._yield_to_manual_requests()
+
+                    if self.state == DEGRADED:
+                        remaining = self.cfg.degrade_cooldown_seconds
+                        chunk = 0.2
+                        while remaining > 0 and not self._stop_requested:
+                            await asyncio.sleep(min(chunk, remaining))
+                            remaining -= chunk
+                        if self._stop_requested:
+                            break
+                        self._set_state(RECOVERING, "cooldown elapsed, probing")
+
+                    self.current_asset = asset
+                    for tf in self.cfg.timeframes:
+                        if self._stop_requested:
+                            break
+                        self.current_timeframe = tf  # Phase 8.3 — status-panel field
+                        t_start = _now()
+                        try:
+                            result = await asyncio.wait_for(
+                                self._run_pipeline(asset, tf),
+                                timeout=self.cfg.asset_timeout_seconds,
+                            )
+                            duration = _now() - t_start
+                            self._asset_durations.append(duration)
+
+                            if "error" in result:
+                                raise RuntimeError(result["error"])
+
+                            self._store_result(asset, tf, result, duration)
+
+                            self._success_count += 1
+                            cycle_success += 1
+                            self._consecutive_failures = 0
+                            if self.state in (DEGRADED, RECOVERING):
+                                self._set_state(RUNNING, "recovered")
+
+                        except Exception as exc:  # noqa: BLE001 — logged, never crashes the loop
+                            duration = _now() - t_start
+                            self._asset_durations.append(duration)
+                            self._failure_count += 1
+                            cycle_failure += 1
+                            self._consecutive_failures += 1
+                            self.last_error = f"{asset}[{tf}]: {exc}"
+                            self._log_event("asset_failed", self.last_error)
+
+                            if isinstance(exc, (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError)):
+                                self._invalidate_fetcher()
+
+                            if self._consecutive_failures >= self.cfg.degrade_after_consecutive_failures:
+                                self._set_state(DEGRADED, f"{self._consecutive_failures} consecutive failures")
+                                self._log_event("degraded", self.last_error or "")
+
+                        await asyncio.sleep(self.cfg.asset_gap_seconds)
+                        self._last_scan_time = _now()  # Phase 8.3 — every attempt, success or failure
+
+                    # Phase 8.1 — progress tracking: count this asset as
+                    # "completed" once all its configured timeframes have
+                    # been attempted (success or failure both count, same
+                    # as backtest_engine.py's candles_processed semantics —
+                    # it tracks work attempted, not just successful work).
+                    self._assets_completed += 1
+
+                self.current_asset = None
+                self.current_timeframe = None  # Phase 8.3
+                self._cleanup_stale_cache()
+
+                cycle_duration = _now() - self._cycle_started_at
+                self._last_full_cycle_duration = cycle_duration
+                self.history.append({
+                    "cycle": self.current_cycle,
+                    "started_at": _iso(self._cycle_started_at),
+                    "ended_at": _iso(_now()),
+                    "duration_seconds": round(cycle_duration, 2),
+                    "assets_scanned": cycle_success + cycle_failure,
+                    "assets_succeeded": cycle_success,
+                    "assets_failed": cycle_failure,
+                })
+                self._log_event("cycle_complete", f"cycle={self.current_cycle} duration={cycle_duration:.1f}s "
+                                                   f"success={cycle_success} failed={cycle_failure}")
+
+                if self._stop_requested:
+                    break
+                sleep_for = max(0.0, self.cfg.cycle_interval_seconds - cycle_duration)
+                # Chunked sleep so stop()/pause() take effect promptly instead
+                # of waiting out the full inter-cycle interval (bug found and
+                # fixed during Phase 7 validation testing).
+                remaining = sleep_for
+                chunk = 0.2
+                while remaining > 0 and not self._stop_requested:
+                    await asyncio.sleep(min(chunk, remaining))
+                    remaining -= chunk
+        finally:
+            self._set_state(STOPPED, "loop exited")
+            self._log_event("scanner_stopped", "")
+            self.current_asset = None
+
+    # ── Metrics / status / results (read-only, safe from Flask WSGI threads) ─
+    def get_metrics(self) -> Dict[str, Any]:
+        total = self._success_count + self._failure_count
+        avg_asset = (sum(self._asset_durations) / len(self._asset_durations)
+                     if self._asset_durations else None)
+        avg_cycle = (sum(h["duration_seconds"] for h in self.history) / len(self.history)
+                     if self.history else None)
+        return {
+            "average_asset_scan_time_seconds": round(avg_asset, 3) if avg_asset is not None else None,
+            "average_cycle_time_seconds": round(avg_cycle, 2) if avg_cycle is not None else None,
+            "success_rate": round(self._success_count / total, 4) if total else None,
+            "failure_rate": round(self._failure_count / total, 4) if total else None,
+            "last_error": self.last_error,
+        }
+
+    def get_status(self) -> Dict[str, Any]:
+        # Phase 8.1 — progress tracking. `total_assets` now reflects the
+        # EFFECTIVE per-run asset list (narrowed by settings.enabled_assets
+        # if that was set at start() time); with no settings_store, or with
+        # enabled_assets unset/empty, self._effective_assets always equals
+        # self._assets — so this is byte-identical to pre-Phase-8.1 output
+        # in the default case.
+        total_assets = len(self._effective_assets)
+        elapsed_time = None
+        percent_complete = 0.0
+        estimated_remaining = None
+        if self._cycle_started_at is not None and self.state != STOPPED:
+            elapsed_time = round(_now() - self._cycle_started_at, 1)
+            if total_assets:
+                percent_complete = round(min(100.0, (self._assets_completed / total_assets) * 100), 1)
+            if percent_complete > 0 and elapsed_time is not None:
+                estimated_remaining = round(elapsed_time / (percent_complete / 100.0) - elapsed_time, 1)
+
+        return {
+            "state": self.state,
+            "running": self.state not in (STOPPED,),
+            "paused": self.state == PAUSED,
+            "degraded": self.state in (DEGRADED, RECOVERING),
+            "total_assets": total_assets,
+            "current_asset": self.current_asset,
+            "current_timeframe": self.current_timeframe,  # Phase 8.3
+            "last_scan_time": _iso(self._last_scan_time) if self._last_scan_time else None,  # Phase 8.3
+            "assets_completed": self._assets_completed,
+            "percent_complete": percent_complete,
+            "elapsed_time": elapsed_time,
+            "estimated_remaining": estimated_remaining,
+            "current_cycle": self.current_cycle,
+            "cycle_started_at": _iso(self._cycle_started_at) if self._cycle_started_at else None,
+            "last_full_cycle_duration_seconds": (
+                round(self._last_full_cycle_duration, 2) if self._last_full_cycle_duration else None
+            ),
+            "refresh_seconds": self.cfg.cycle_interval_seconds,
+            "asset_gap_seconds": self.cfg.asset_gap_seconds,
+            "timeframes": self.cfg.timeframes,
+            "cached_results": len(self._cache),
+            "manual_requests_in_flight": self.manual_requests_in_flight,
+            "metrics": self.get_metrics(),
+            "history": list(self.history),
+            "events": list(self.events)[-25:],  # recent slice; full log via a dedicated field if needed
+            "settings_enabled": self._settings_store is not None,  # Phase 8.1 — visibility only
+            "minimum_filter_score": self._minimum_filter_score,     # Phase 8.1
+            "schema_version": SCANNER_SCHEMA_VERSION,
+            "engine_version": SCANNER_ENGINE_VERSION,
+        }
+
+    def get_results(self, min_confidence: Optional[float] = None,
+                     timeframe: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+        min_conf = min_confidence if min_confidence is not None else self.cfg.min_confidence
+        limit = limit or self.cfg.top_n
+
+        candidates = []
+        for (asset, tf), entry in self._cache.items():
+            if timeframe and tf != timeframe:
+                continue
+            # Phase 7.1 STEP 3: filter_score is now a GRADED quality metric
+            # and is no longer forced to 0 on a mandatory gate failure — so
+            # it can no longer be used as a visibility proxy. Use the new
+            # mandatory_pass field instead (same original binary hard-gate
+            # semantics as Phase 7.0's gate check). A hidden signal still
+            # keeps its filter_score cached for ranking/analysis purposes —
+            # it's just excluded from the scanner's surfaced results here.
+            if not entry.get("mandatory_pass"):
+                continue  # a mandatory gate failed -> hidden from results, per spec
+            # Phase 8.1 — optional additional quality gate from Settings.
+            # self._minimum_filter_score defaults to 0.0 (no settings_store,
+            # or minimum_filter_score unset/0 in settings), which never
+            # excludes anything beyond the existing mandatory_pass gate —
+            # byte-identical to pre-Phase-8.1 behavior in that case.
+            if self._minimum_filter_score and (entry.get("filter_score", 0) or 0) < self._minimum_filter_score:
+                continue
+            confluence = entry.get("confluence", {})
+            signal = confluence.get("signal")
+            confidence = confluence.get("confidence", 0) or 0
+            if signal in (None, "WAIT"):
+                continue
+            if confidence < min_conf:
+                continue
+            candidates.append(entry)
+
+        # Ranking (Phase 7 STEP 4/5): filter_score desc (primary), confidence
+        # desc, payout desc, last_update (freshness) desc.
+        # Phase 8.3 bug fix: freshness was previously compared as a raw ISO
+        # string with no negation, which sorts ascending (oldest-first) on
+        # ties — the opposite of the "freshness desc" (most-recent-first)
+        # this comment always said it implemented. Parsing to epoch and
+        # negating fixes the tie-break direction; filter_score/confidence/
+        # payout ordering (unaffected by this bug) is unchanged.
+        def _rank_key(e: Dict[str, Any]):
+            filter_score = e.get("filter_score", 0) or 0
+            confidence = e.get("confluence", {}).get("confidence", 0) or 0
+            payout = e.get("payout_pct") or 0
+            freshness_epoch = self._parse_iso_epoch(e.get("last_update", ""))
+            return (-filter_score, -confidence, -payout, -freshness_epoch)
+
+        candidates.sort(key=_rank_key)
+        top = candidates[:limit]
+        for i, entry in enumerate(top, start=1):
+            entry["rank"] = i
+
+        return {
+            "top_signals": top,
+            "generated_at": _iso(_now()),
+            "cycle": self.current_cycle,
+            "schema_version": SCANNER_SCHEMA_VERSION,
+            "engine_version": SCANNER_ENGINE_VERSION,
+        }
+
+    # ── Phase 8.1: compatibility aliases ────────────────────────────────────
+    # Pure aliases, added ONLY because the Phase 8.1 spec asked for a
+    # `status()`/`results()` name alongside the existing `get_status()`/
+    # `get_results()` — no new behavior, no parameter changes, nothing else
+    # calls these internally (the loop and existing routes still use the
+    # original get_status()/get_results() names, unchanged).
+    def status(self) -> Dict[str, Any]:
+        """Alias for get_status() — see that method for the full contract."""
+        return self.get_status()
+
+    def results(self, min_confidence: Optional[float] = None,
+                timeframe: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+        """Alias for get_results() — see that method for the full contract."""
+        return self.get_results(min_confidence=min_confidence, timeframe=timeframe, limit=limit)

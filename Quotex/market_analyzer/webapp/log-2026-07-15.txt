@@ -1,0 +1,75 @@
+2026-07-15 10:14:59.263 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:14:59.264 | WARNING  | api_quotex.config:_load_session:164 - session.json not found, using default session data
+2026-07-15 10:14:59.264 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:15:52.784 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:15:52.784 | WARNING  | api_quotex.config:_load_session:164 - session.json not found, using default session data
+2026-07-15 10:15:52.784 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:15:52.821 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:15:52.822 | WARNING  | api_quotex.config:_load_session:164 - session.json not found, using default session data
+2026-07-15 10:15:52.822 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:24:04.371 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:24:04.371 | WARNING  | api_quotex.config:_load_session:164 - session.json not found, using default session data
+2026-07-15 10:24:04.371 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:24:04.376 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:24:04.376 | WARNING  | api_quotex.config:_load_session:164 - session.json not found, using default session data
+2026-07-15 10:24:04.376 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:33:02.570 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:33:02.570 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 10:33:02.570 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:33:02.578 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:33:02.578 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 10:33:02.578 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:42:28.543 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:42:28.544 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 10:42:28.544 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 10:42:28.544 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 10:42:28.544 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 10:42:28.544 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 14:53:23.018 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 14:53:23.019 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 14:53:23.019 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 14:53:23.020 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 14:53:23.021 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 14:53:23.021 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:00:08.190 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:00:08.191 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:00:08.192 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:00:08.197 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:00:08.197 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:00:08.197 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:01:20.455 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:01:20.456 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:01:20.456 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:01:20.494 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:01:20.494 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:01:20.494 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:35:26.976 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:35:26.977 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:35:26.977 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:35:26.980 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:35:26.980 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:35:26.981 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:36:21.415 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:36:21.415 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:36:21.415 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:36:21.763 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:36:21.763 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:36:21.763 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:36:51.737 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:36:51.738 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:36:51.738 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 15:36:51.905 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 15:36:51.906 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 15:36:51.906 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 23:40:15.952 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 23:40:15.953 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 23:40:15.953 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 23:40:15.955 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 23:40:15.955 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 23:40:15.955 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 23:40:48.965 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 23:40:48.965 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 23:40:48.965 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully
+2026-07-15 23:40:48.968 | INFO     | api_quotex.config:_load_config:114 - Configuration loaded from config.json
+2026-07-15 23:40:48.968 | INFO     | api_quotex.config:_load_session:141 - SSID loaded from QUOTEX_SSID env var (length: 40)
+2026-07-15 23:40:48.968 | INFO     | api_quotex.config:__init__:89 - Config instance initialized successfully

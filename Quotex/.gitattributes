@@ -1,0 +1,2 @@
+quotex/.playwright-browsers/chromium-1228/chrome-linux64/chrome filter=lfs diff=lfs merge=lfs -text
+quotex/.playwright-browsers/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell filter=lfs diff=lfs merge=lfs -text
