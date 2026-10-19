@@ -12,7 +12,7 @@ _Replace the heading above with the project's name, and this line with one sente
 - Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack
-
+  
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
